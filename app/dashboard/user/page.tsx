@@ -3,35 +3,46 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { useAuth } from '@/context/AuthContext';
-import { UserRole, TaskResponseDTO, TaskRequestDTO, TaskStatus } from '@/types';
+import { UserRole, TaskResponseDTO, TaskRequestDTO, TaskStatus, TaskPriority } from '@/types';
 import { taskService } from '@/services/taskService';
 import TaskCard from '@/components/TaskCard';
 import TaskModal from '@/components/TaskModal';
 import TaskForm from '@/components/TaskForm';
+import { useAlert } from '@/context/AlertContext';
+import Navbar from '@/components/Navbar';
+import FilterBar from '@/components/FilterBar';
 
 export default function UserDashboard() {
   const { user, logout } = useAuth();
+  const { showAlert, showConfirm } = useAlert();
   const [tasks, setTasks] = useState<TaskResponseDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskResponseDTO | undefined>(undefined);
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Filters
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | ''>('');
+  const [priorityFilter, setPriorityFilter] = useState<TaskPriority | ''>('');
+
   const fetchTasks = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await taskService.getTasks();
+      const response = await taskService.getTasks({
+        status: statusFilter || undefined,
+        priority: priorityFilter || undefined
+      });
       setTasks(response.content || []);
     } catch (error) {
       console.error('Failed to fetch tasks:', error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [statusFilter, priorityFilter]);
 
   useEffect(() => {
     fetchTasks();
-  }, [fetchTasks]);
+  }, [fetchTasks, statusFilter, priorityFilter]);
 
   const handleCreateTask = () => {
     setEditingTask(undefined);
@@ -44,13 +55,21 @@ export default function UserDashboard() {
   };
 
   const handleDeleteTask = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this task?')) return;
-    try {
-      await taskService.deleteTask(id);
-      setTasks((prev) => prev.filter((t) => t.id !== id));
-    } catch (error) {
-      console.error('Failed to delete task:', error);
-    }
+    showConfirm(
+      'Delete Task',
+      'Are you sure you want to remove this task? This cannot be undone.',
+      async () => {
+        try {
+          await taskService.deleteTask(id);
+          setTasks((prev) => prev.filter((t) => t.id !== id));
+          showAlert('Success', 'Task deleted successfully.', 'success');
+        } catch (error) {
+          console.error('Failed to delete task:', error);
+          showAlert('Error', 'Failed to delete the task.', 'danger');
+        }
+      },
+      'danger'
+    );
   };
 
   const handleToggleComplete = async (task: TaskResponseDTO) => {
@@ -101,25 +120,9 @@ export default function UserDashboard() {
   return (
     <ProtectedRoute allowedRoles={[UserRole.USER]}>
       <main className="min-h-screen bg-dot-pattern">
-        {/* Navbar */}
-        <nav className="glass sticky top-0 z-20 border-b border-white/5">
-          <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-            <h1 className="text-xl font-bold gradient-text">MiniTask</h1>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-zinc-400 font-medium">
-                {user?.firstName} {user?.lastName}
-              </span>
-              <button
-                onClick={logout}
-                className="text-sm bg-white/5 hover:bg-white/10 px-4 py-2 rounded-xl transition-all border border-white/10 text-zinc-300"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </nav>
+        <Navbar />
 
-        <div className="max-w-7xl mx-auto px-4 py-12 space-y-12 animate-in text-white">
+        <div className="max-w-7xl mx-auto px-4 pt-24 pb-12 space-y-12 animate-in text-white">
           <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
             <div className="space-y-2">
               <h2 className="text-4xl font-bold gradient-text leading-tight">Your Dashboard</h2>
@@ -132,6 +135,13 @@ export default function UserDashboard() {
               Add New Task
             </button>
           </div>
+
+          <FilterBar 
+            status={statusFilter}
+            priority={priorityFilter}
+            onStatusChange={setStatusFilter}
+            onPriorityChange={setPriorityFilter}
+          />
 
           {loading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">

@@ -3,13 +3,17 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { useAuth } from '@/context/AuthContext';
-import { UserRole, UserResponse, PaginatedResponse, TaskResponseDTO } from '@/types';
+import { UserRole, UserResponse, PaginatedResponse, TaskResponseDTO, TaskStatus, TaskPriority } from '@/types';
 import { adminService } from '@/services/adminService';
 import { taskService } from '@/services/taskService';
 import AllTasksTable from '@/components/AllTasksTable';
+import { useAlert } from '@/context/AlertContext';
+import Navbar from '@/components/Navbar';
+import FilterBar from '@/components/FilterBar';
 
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
+  const { showAlert, showConfirm } = useAlert();
 
   // Tabs State
   const [activeTab, setActiveTab] = useState<'users' | 'tasks'>('users');
@@ -24,13 +28,21 @@ export default function AdminDashboard() {
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksPage, setTasksPage] = useState(0);
 
+  // Global Stats
+  const [globalStats, setGlobalStats] = useState<{ users: number; tasks: number }>({ users: 0, tasks: 0 });
+
   const [actionLoading, setActionLoading] = useState<number | null>(null);
+
+  // Filters
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | ''>('');
+  const [priorityFilter, setPriorityFilter] = useState<TaskPriority | ''>('');
 
   const fetchUsers = useCallback(async (page: number) => {
     try {
       setUsersLoading(true);
       const data = await adminService.getAllUsers(page, 5);
       setUsersData(data);
+      setGlobalStats(prev => ({ ...prev, users: data.totalElements }));
     } catch (error) {
       console.error('Failed to fetch users:', error);
     } finally {
@@ -38,11 +50,20 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  const fetchTasks = useCallback(async (page: number) => {
+  const fetchTasks = useCallback(async (page: number, status?: TaskStatus, priority?: TaskPriority) => {
     try {
       setTasksLoading(true);
-      const data = await taskService.getTasks({ page, size: 5 });
+      const data = await taskService.getTasks({ 
+        page, 
+        size: 5,
+        status: status || undefined,
+        priority: priority || undefined
+      });
       setTasksData(data);
+      // Update global count only if no filters are applied
+      if (!status && !priority) {
+        setGlobalStats(prev => ({ ...prev, tasks: data.totalElements }));
+      }
     } catch (error) {
       console.error('Failed to fetch tasks:', error);
     } finally {
@@ -50,17 +71,30 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  // Fetch counts on mount
+  // Consolidated Data Fetching
   useEffect(() => {
-    fetchUsers(0);
-    fetchTasks(0);
-  }, [fetchUsers, fetchTasks]);
+    // Always fetch users on usersPage change or initial load
+    fetchUsers(usersPage);
+  }, [fetchUsers, usersPage]);
 
-  // Tab and Page specific fetching
   useEffect(() => {
-    if (activeTab === 'users' && usersPage !== 0) fetchUsers(usersPage);
-    if (activeTab === 'tasks' && tasksPage !== 0) fetchTasks(tasksPage);
-  }, [activeTab, usersPage, tasksPage, fetchUsers, fetchTasks]);
+    // Fetch tasks based on page and filters
+    fetchTasks(tasksPage, statusFilter || undefined, priorityFilter || undefined);
+  }, [fetchTasks, tasksPage, statusFilter, priorityFilter]);
+
+  // Special effect to ensure we have "All" counts even if filters are active on load
+  useEffect(() => {
+    if (statusFilter || priorityFilter) {
+      taskService.getTasks({ page: 0, size: 1 }).then(data => {
+        setGlobalStats(prev => ({ ...prev, tasks: data.totalElements }));
+      });
+    }
+  }, []);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setTasksPage(0);
+  }, [statusFilter, priorityFilter]);
 
   const handleRoleChange = async (userId: number, newRole: UserRole) => {
     try {
@@ -72,24 +106,31 @@ export default function AdminDashboard() {
       }) : null);
     } catch (error) {
       console.error('Failed to change role:', error);
-      alert('Failed to update user role.');
+      showAlert('Protocol Error', 'Failed to update user authorization levels.', 'danger');
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleDeleteUser = async (userId: number) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
-    try {
-      setActionLoading(userId);
-      await adminService.deleteUser(userId);
-      fetchUsers(usersPage);
-    } catch (error) {
-      console.error('Failed to delete user:', error);
-      alert('Failed to delete user.');
-    } finally {
-      setActionLoading(null);
-    }
+    showConfirm(
+      'Decommission User',
+      'Are you sure you want to remove this user from the nexus? This action is irreversible.',
+      async () => {
+        try {
+          setActionLoading(userId);
+          await adminService.deleteUser(userId);
+          fetchUsers(usersPage);
+          showAlert('Success', 'User has been successfully decommissioned.', 'success');
+        } catch (error) {
+          console.error('Failed to delete user:', error);
+          showAlert('Decommission Failed', 'Unable to remove user from the system protocol.', 'danger');
+        } finally {
+          setActionLoading(null);
+        }
+      },
+      'danger'
+    );
   };
 
   return (
@@ -100,29 +141,9 @@ export default function AdminDashboard() {
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/10 blur-[120px] rounded-full" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-500/10 blur-[120px] rounded-full" />
 
-        {/* Navbar */}
-        <nav className="glass sticky top-0 z-50 border-b border-white/5">
-          <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-            <h1 className="text-xl font-black tracking-tight gradient-text">
-              MINITASK
-            </h1>
-            <div className="flex items-center gap-6">
-              <div className="hidden md:flex flex-col items-end">
-                <span className="text-xs font-bold text-white uppercase tracking-tighter">Administrator</span>
-                <span className="text-[10px] text-zinc-500 font-medium">{user?.email}</span>
-              </div>
-              <button
-                onClick={logout}
-                className="group relative px-5 py-2 rounded-full bg-white text-black text-xs font-bold transition-all hover:scale-105 active:scale-95 overflow-hidden"
-              >
-                <span className="relative z-10">Logout</span>
-                <div className="absolute inset-0 bg-zinc-200 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
-              </button>
-            </div>
-          </div>
-        </nav>
+        <Navbar />
 
-        <div className="max-w-7xl mx-auto px-4 py-16 space-y-16 relative z-10 animate-in">
+        <div className="max-w-7xl mx-auto px-4 pt-24 pb-16 space-y-16 relative z-10 animate-in">
           <div className="space-y-4">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-bold text-blue-400 uppercase tracking-widest">
               <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
@@ -142,7 +163,7 @@ export default function AdminDashboard() {
                 <span className="text-[10px] font-bold text-blue-400 bg-blue-500/5 px-2 py-1 rounded-lg">+12%</span>
               </div>
               <h3 className="text-sm font-bold text-zinc-500 uppercase tracking-widest">Total Users</h3>
-              <p className="text-4xl font-black text-white mt-2 tracking-tighter">{usersData?.totalElements || '0'}</p>
+              <p className="text-4xl font-black text-white mt-2 tracking-tighter">{globalStats.users}</p>
             </div>
 
             <div className="glass-card p-8 rounded-[2rem] relative overflow-hidden card-glow-purple group">
@@ -153,7 +174,7 @@ export default function AdminDashboard() {
                 <span className="text-[10px] font-bold text-purple-400 bg-purple-500/5 px-2 py-1 rounded-lg">Live</span>
               </div>
               <h3 className="text-sm font-bold text-zinc-500 uppercase tracking-widest">Active Tasks</h3>
-              <p className="text-4xl font-black text-white mt-2 tracking-tighter">{tasksData?.totalElements || '0'}</p>
+              <p className="text-4xl font-black text-white mt-2 tracking-tighter">{globalStats.tasks}</p>
             </div>
           </div>
 
@@ -233,7 +254,7 @@ export default function AdminDashboard() {
                             </div>
                             <div className="flex flex-col">
                               <span className="font-bold text-white tracking-tight">{u.firstName} {u.lastName}</span>
-                              <span className="text-[10px] text-zinc-600 uppercase font-black tracking-widest mt-0.5">UID: {u.userId.toString().padStart(4, '0')}</span>
+                              <span className="text-[10px] text-zinc-600 uppercase font-black tracking-widest mt-0.5">UID: {u.userId}</span>
                             </div>
                           </div>
                         </td>
@@ -285,14 +306,22 @@ export default function AdminDashboard() {
 
           {/* Task Oversight Content */}
           {activeTab === 'tasks' && (
-            <AllTasksTable
-              tasks={tasksData?.content || []}
-              loading={tasksLoading}
-              currentPage={tasksPage}
-              totalPages={tasksData?.totalPages || 1}
-              last={tasksData?.last || false}
-              onPageChange={setTasksPage}
-            />
+            <div className="space-y-6 animate-in">
+              <FilterBar 
+                status={statusFilter}
+                priority={priorityFilter}
+                onStatusChange={setStatusFilter}
+                onPriorityChange={setPriorityFilter}
+              />
+              <AllTasksTable
+                tasks={tasksData?.content || []}
+                loading={tasksLoading}
+                currentPage={tasksPage}
+                totalPages={tasksData?.totalPages || 1}
+                last={tasksData?.last || false}
+                onPageChange={setTasksPage}
+              />
+            </div>
           )}
         </div>
       </main>
